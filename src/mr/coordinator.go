@@ -23,21 +23,21 @@ const (
 )
 
 type TaskInfo struct {
-	taskType   int // MAP | REDUCE
-	beginTime  time.Time
-	fileName   string
-	identifier int
-	nReduce    int
-	nFiles     int
+	TaskType   int // MAP | REDUCE
+	BeginTime  time.Time
+	FileName   string
+	Identifier int
+	NReduce    int
+	NFiles     int
 }
 
 func (task *TaskInfo) isOutOfTime() bool {
 	// larger than 60 s  We consider it is out of time
-	return time.Now().Sub(task.beginTime) > time.Duration(time.Second*60)
+	return time.Now().Sub(task.BeginTime) > time.Duration(time.Second*60)
 }
 
 func (task *TaskInfo) setNow() {
-	task.beginTime = time.Now()
+	task.BeginTime = time.Now()
 }
 
 // the array of Task in coordinator
@@ -78,7 +78,7 @@ func (q *TaskQueue) pop() (TaskInfo, error) {
 	q.lock()
 	defer q.unlock()
 	if q.size() == 0 {
-		q.unlock()
+		// q.unlock()
 		return TaskInfo{}, errors.New("the task queue is empty")
 	}
 	ret := q.taskArray[0]
@@ -92,12 +92,11 @@ func (q *TaskQueue) remove(id int) {
 
 	for idx := 0; idx < len(q.taskArray); idx++ {
 		task := q.taskArray[idx]
-		if id == task.identifier {
+		if id == task.Identifier {
 			q.taskArray = append(q.taskArray[:idx], q.taskArray[idx+1:]...)
 			break
 		}
 	}
-	q.unlock()
 }
 
 func (q *TaskQueue) queueOutOfTime() ([]TaskInfo, error) {
@@ -144,59 +143,63 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
-func (c *Coordinator) AskTask(args *ExampleArgs, reply *TaskInfo) error {
+func (c *Coordinator) AskTask(args *TaskInfo, reply *TaskInfo) error {
 	//check any task which is not finished
+	fmt.Println("1")
 	if c.Done() {
+		// fmt.Println("1")
 		reply = nil
 		return nil
 	}
 
 	// distribute map task
 	task, ok := c.mapWaitingTaskList.pop()
+
 	if ok == nil {
 		task.setNow()
 		c.mapTaskList.push(task)
 
 		*reply = task
-		fmt.Printf("Distribute Map Task whose identifier %v\n", reply.identifier)
+		fmt.Printf("Distribute Map Task whose identifier %v\n", reply.Identifier)
 		return nil
 	}
-
+	fmt.Println("2")
 	task, ok = c.reduceWaitingTaskList.pop()
 	if ok == nil {
 		task.setNow()
 		c.reduceTaskList.push(task)
 		*reply = task
-		fmt.Printf("Distribute Reduce Task whose identifier %v\n", reply.identifier)
+		fmt.Printf("Distribute Reduce Task whose identifier %v\n", reply.Identifier)
 		return nil
 	}
 
 	// no extra task to distribute, but some tasks are running, maybe it will crash and redistribute
 	// set reply type = WAIT
 	if c.mapTaskList.size() != 0 || c.reduceTaskList.size() != 0 {
-		reply.taskType = WAIT
+		fmt.Println("WAIT worker")
+		reply.TaskType = WAIT
 		return nil
 	}
 
 	// all task is finished
-	reply.taskType = END
+	reply.TaskType = END
 	c.finished = true
 	return nil
 }
 
 func (c *Coordinator) AckTask(args *TaskInfo, reply *TaskInfo) error {
-	switch args.taskType {
+	switch args.TaskType {
 	case MAPTASK:
-		c.mapTaskList.remove(args.identifier)
-		fmt.Printf("Map Task (identifier %v) complete", args.identifier)
+		c.mapTaskList.remove(args.Identifier)
+		fmt.Printf("Map Task (identifier %v) complete", args.Identifier)
 		// If all map tasks are done, We need to start to distribute reduce Task
 		if c.mapTaskList.size() == 0 && c.mapWaitingTaskList.size() == 0 {
 			fmt.Printf("Map Tasks are all finished | Reduce Tasks start ")
 			c.distributeReduce()
 		}
 	case REDUCETASK:
-		fmt.Printf("Reduce Task (identifier %v) complete", args.identifier)
-		c.reduceTaskList.remove(args.identifier)
+		fmt.Printf("Reduce Task (identifier %v) complete", args.Identifier)
+		c.reduceTaskList.remove(args.Identifier)
 
 	default: // END and WAIT no Need to Call AckTask
 		return errors.New("MisTake in Calling AckTask")
@@ -207,14 +210,14 @@ func (c *Coordinator) AckTask(args *TaskInfo, reply *TaskInfo) error {
 func (c *Coordinator) distributeReduce() error {
 
 	reduceTask := TaskInfo{
-		taskType: REDUCETASK,
-		nReduce:  c.nReduce,
-		nFiles:   len(c.fileList),
+		TaskType: REDUCETASK,
+		NReduce:  c.nReduce,
+		NFiles:   len(c.fileList),
 	}
 
 	for reduceIndex := 0; reduceIndex < c.nReduce; reduceIndex++ {
 		task := reduceTask
-		task.identifier = reduceIndex
+		task.Identifier = reduceIndex
 		c.reduceWaitingTaskList.push(task)
 	}
 
@@ -274,10 +277,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	initMapTasks := make([]TaskInfo, 0)
 	for fileIndex, filename := range files {
 		mapTask := TaskInfo{
-			taskType:   MAPTASK,
-			fileName:   filename,
-			identifier: fileIndex,
-			nReduce:    nReduce,
+			TaskType:   MAPTASK,
+			FileName:   filename,
+			Identifier: fileIndex,
+			NReduce:    nReduce,
 		}
 		initMapTasks = append(initMapTasks, mapTask)
 	}
@@ -286,9 +289,22 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		nReduce:  nReduce,
 		fileList: files,
 	}
+	c.mapWaitingTaskList.pushList(initMapTasks)
 
-	c.mapTaskList.pushList(initMapTasks)
-
+	// create tmp directory
+	dirname := "mr-tmp"
+	if _, err := os.Stat(dirname); !os.IsNotExist(err) {
+		// tmp directory exist // remove all
+		err = os.RemoveAll(dirname)
+		if err != nil {
+			panic("failed to remove existed tmp directory")
+		}
+	}
+	// create dir
+	err := os.Mkdir(dirname, os.ModePerm)
+	if err != nil {
+		panic("failed to create tmp directory")
+	}
 	go c.MoveOutOtTimeTask()
 	c.server()
 	return &c

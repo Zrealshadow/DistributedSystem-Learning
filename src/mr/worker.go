@@ -40,7 +40,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	for {
 		task := CallAskTask()
-		switch task.taskType {
+		switch task.TaskType {
 		case MAPTASK:
 			mapOperator(mapf, task)
 
@@ -69,7 +69,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 //helper function for Worker
 func mapOperator(mapf func(string, string) []KeyValue, mapTask *TaskInfo) {
-	filename := mapTask.fileName
+	filename := mapTask.FileName
 	file, err := os.Open(filename)
 	if err != nil {
 		errorstr := fmt.Sprintf("the file %v dose not exist", filename)
@@ -82,7 +82,7 @@ func mapOperator(mapf func(string, string) []KeyValue, mapTask *TaskInfo) {
 		panic(errorstr)
 	}
 	file.Close()
-	nReduce := mapTask.nReduce
+	nReduce := mapTask.NReduce
 	intermediate := mapf(filename, string(content))
 	outfiles := make([]*os.File, nReduce)
 	encoderList := make([]*json.Encoder, nReduce)
@@ -98,13 +98,13 @@ func mapOperator(mapf func(string, string) []KeyValue, mapTask *TaskInfo) {
 		enc := encoderList[index]
 		err := enc.Encode(&kv)
 		if err != nil {
-			fmt.Printf("File %v Key %v Value %v Error %v \n", mapTask.fileName, kv.Key, kv.Value, err)
+			fmt.Printf("File %v Key %v Value %v Error %v \n", mapTask.FileName, kv.Key, kv.Value, err)
 			panic("fail to write kv into file")
 		}
 	}
 
 	// rename the temport file into formal file.
-	outPrefix := "mr-tmp/mr-" + strconv.Itoa(mapTask.identifier) + "-"
+	outPrefix := "mr-tmp/mr-" + strconv.Itoa(mapTask.Identifier) + "-"
 	for idx, file := range outfiles {
 		outname := outPrefix + strconv.Itoa(idx)
 		oldpath := filepath.Join(file.Name())
@@ -113,15 +113,15 @@ func mapOperator(mapf func(string, string) []KeyValue, mapTask *TaskInfo) {
 	}
 
 	//Ack
-	CallAckTask(mapTask.taskType)
+	CallAckTask(mapTask.TaskType)
 
 }
 
 func reduceOperator(reducef func(string, []string) string, reduceTask *TaskInfo) {
 	intermediate_prefix := "mr-tmp/mr-"
-	taskId := reduceTask.identifier
+	taskId := reduceTask.Identifier
 	kvList := make([]KeyValue, 0)
-	for idx := 0; idx < reduceTask.nFiles; idx++ {
+	for idx := 0; idx < reduceTask.NFiles; idx++ {
 		filepath := intermediate_prefix + strconv.Itoa(idx) + "-" + strconv.Itoa(taskId)
 		file, err := os.Open(filepath)
 		if err != nil {
@@ -169,10 +169,10 @@ func reduceOperator(reducef func(string, []string) string, reduceTask *TaskInfo)
 	}
 
 	// rename the file
-	outfilename := "mr-out-" + strconv.Itoa(reduceTask.identifier)
+	outfilename := "mr-out-" + strconv.Itoa(reduceTask.Identifier)
 	os.Rename(filepath.Join(outTmpFile.Name()), outfilename)
 	outTmpFile.Close()
-	CallAckTask(reduceTask.taskType)
+	CallAckTask(reduceTask.TaskType)
 }
 
 //
@@ -200,18 +200,19 @@ func CallExample() {
 
 func CallAskTask() *TaskInfo {
 	// declare an argument structure.
-	args := ExampleArgs{}
+	args := TaskInfo{}
 	// declare a reply structure.
 	reply := TaskInfo{}
-
+	fmt.Println("Label")
 	// send the RPC request, wait for the reply.
 	call("Coordinator.AskTask", &args, &reply)
+	fmt.Printf("Type %v\n", reply.TaskType)
 	return &reply
 }
 
 func CallAckTask(task_type int) *TaskInfo {
 	args := TaskInfo{
-		taskType: task_type,
+		TaskType: task_type,
 	}
 
 	reply := TaskInfo{}
@@ -232,7 +233,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		log.Fatal("dialing:", err)
 	}
 	defer c.Close()
-
+	fmt.Println("1")
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
