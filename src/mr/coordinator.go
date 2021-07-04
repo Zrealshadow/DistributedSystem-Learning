@@ -56,6 +56,8 @@ func (q *TaskQueue) unlock() {
 }
 
 func (q *TaskQueue) size() int {
+	q.lock()
+	defer q.unlock()
 	return len(q.taskArray)
 }
 
@@ -77,7 +79,7 @@ func (q *TaskQueue) pushList(taskList []TaskInfo) {
 func (q *TaskQueue) pop() (TaskInfo, error) {
 	q.lock()
 	defer q.unlock()
-	if q.size() == 0 {
+	if len(q.taskArray) == 0 {
 		// q.unlock()
 		return TaskInfo{}, errors.New("the task queue is empty")
 	}
@@ -100,13 +102,14 @@ func (q *TaskQueue) remove(id int) {
 }
 
 func (q *TaskQueue) queueOutOfTime() ([]TaskInfo, error) {
-	outArray := make([]TaskInfo, 0)
 	q.lock()
 	defer q.unlock()
 
+	outArray := make([]TaskInfo, 0)
 	for idx := 0; idx < len(q.taskArray); {
 		task := q.taskArray[idx]
 		if task.isOutOfTime() {
+			task.setNow()
 			outArray = append(outArray, task)
 			q.taskArray = append(q.taskArray[:idx], q.taskArray[idx+1:]...)
 		} else {
@@ -128,6 +131,7 @@ type Coordinator struct {
 	mapWaitingTaskList    TaskQueue
 	reduceWaitingTaskList TaskQueue
 
+	fmtx     sync.Mutex
 	finished bool
 }
 
@@ -145,7 +149,7 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 
 func (c *Coordinator) AskTask(args *TaskInfo, reply *TaskInfo) error {
 	//check any task which is not finished
-	fmt.Println("1")
+	// fmt.Println("1")
 	if c.Done() {
 		// fmt.Println("1")
 		reply = nil
@@ -160,29 +164,31 @@ func (c *Coordinator) AskTask(args *TaskInfo, reply *TaskInfo) error {
 		c.mapTaskList.push(task)
 
 		*reply = task
-		fmt.Printf("Distribute Map Task whose identifier %v\n", reply.Identifier)
+		// fmt.Printf("Distribute Map Task whose identifier %v\n", reply.Identifier)
 		return nil
 	}
-	fmt.Println("2")
+	// fmt.Println("2")
 	task, ok = c.reduceWaitingTaskList.pop()
 	if ok == nil {
 		task.setNow()
 		c.reduceTaskList.push(task)
 		*reply = task
-		fmt.Printf("Distribute Reduce Task whose identifier %v\n", reply.Identifier)
+		// fmt.Printf("Distribute Reduce Task whose identifier %v\n", reply.Identifier)
 		return nil
 	}
 
 	// no extra task to distribute, but some tasks are running, maybe it will crash and redistribute
 	// set reply type = WAIT
 	if c.mapTaskList.size() != 0 || c.reduceTaskList.size() != 0 {
-		fmt.Println("WAIT worker")
+		// fmt.Println("WAIT worker")
 		reply.TaskType = WAIT
 		return nil
 	}
 
 	// all task is finished
 	reply.TaskType = END
+	c.fmtx.Lock()
+	defer c.fmtx.Unlock()
 	c.finished = true
 	return nil
 }
@@ -191,14 +197,14 @@ func (c *Coordinator) AckTask(args *TaskInfo, reply *TaskInfo) error {
 	switch args.TaskType {
 	case MAPTASK:
 		c.mapTaskList.remove(args.Identifier)
-		fmt.Printf("Map Task (identifier %v) complete", args.Identifier)
+		// fmt.Printf("Map Task (identifier %v) complete\n", args.Identifier)
 		// If all map tasks are done, We need to start to distribute reduce Task
 		if c.mapTaskList.size() == 0 && c.mapWaitingTaskList.size() == 0 {
-			fmt.Printf("Map Tasks are all finished | Reduce Tasks start ")
+			fmt.Printf("Map Tasks are all finished | Reduce Tasks start \n")
 			c.distributeReduce()
 		}
 	case REDUCETASK:
-		fmt.Printf("Reduce Task (identifier %v) complete", args.Identifier)
+		// fmt.Printf("Reduce Task (identifier %v) complete\n", args.Identifier)
 		c.reduceTaskList.remove(args.Identifier)
 
 	default: // END and WAIT no Need to Call AckTask
@@ -247,7 +253,8 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 
 	// Your code here.
-
+	c.fmtx.Lock()
+	defer c.fmtx.Unlock()
 	return c.finished
 }
 
@@ -305,7 +312,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	if err != nil {
 		panic("failed to create tmp directory")
 	}
-	go c.MoveOutOtTimeTask()
+	// go c.MoveOutOtTimeTask()
 	c.server()
 	return &c
 }

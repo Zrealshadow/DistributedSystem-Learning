@@ -48,10 +48,10 @@ func Worker(mapf func(string, string) []KeyValue,
 			reduceOperator(reducef, task)
 
 		case WAIT:
-			time.Sleep(time.Duration(time.Second * 60))
+			time.Sleep(time.Duration(time.Second * 5))
 
 		case END:
-			fmt.Printf("All Tasks are finished")
+			fmt.Printf("All Tasks are finished\n")
 			return
 
 		default:
@@ -113,16 +113,20 @@ func mapOperator(mapf func(string, string) []KeyValue, mapTask *TaskInfo) {
 	}
 
 	//Ack
-	CallAckTask(mapTask.TaskType)
+	CallAckTask(mapTask)
 
 }
 
 func reduceOperator(reducef func(string, []string) string, reduceTask *TaskInfo) {
 	intermediate_prefix := "mr-tmp/mr-"
 	taskId := reduceTask.Identifier
-	kvList := make([]KeyValue, 0)
+
+	maps := make(map[string][]string)
+	keyList := make([]string, 0)
+
 	for idx := 0; idx < reduceTask.NFiles; idx++ {
 		filepath := intermediate_prefix + strconv.Itoa(idx) + "-" + strconv.Itoa(taskId)
+		// fmt.Println(filepath)
 		file, err := os.Open(filepath)
 		if err != nil {
 			fmt.Printf("File %v failed to open", filepath)
@@ -134,15 +138,21 @@ func reduceOperator(reducef func(string, []string) string, reduceTask *TaskInfo)
 			if err := dec.Decode(&kv); err != nil {
 				break
 			}
-			kvList = append(kvList, kv)
+			if _, ok := maps[kv.Key]; !ok {
+				maps[kv.Key] = make([]string, 0, 100)
+				keyList = append(keyList, kv.Key)
+			}
+			maps[kv.Key] = append(maps[kv.Key], kv.Value)
 		}
 		file.Close()
 	}
 
+	sort.Strings(keyList)
+
 	// sort
-	sort.Slice(kvList, func(i, j int) bool {
-		return kvList[i].Key < kvList[j].Key
-	})
+	// sort.Slice(kvList, func(i, j int) bool {
+	// 	return kvList[i].Key < kvList[j].Key
+	// })
 
 	// compact
 	outTmpFile, err := ioutil.TempFile("mr-tmp", "mr-*")
@@ -150,29 +160,16 @@ func reduceOperator(reducef func(string, []string) string, reduceTask *TaskInfo)
 		panic("failed to create temporary file")
 	}
 
-	k := ""
-	var v []string
-	for idx, kv := range kvList {
-		if k != kv.Key {
-			if idx != 0 {
-				ans := reducef(k, v)
-
-				// write into the file
-				fmt.Fprintf(outTmpFile, "%v %v\n", k, ans)
-			}
-
-			k = kv.Key
-			v = make([]string, 0)
-
-		}
-		v = append(v, kv.Value)
+	for _, k := range keyList {
+		output := reducef(k, maps[k])
+		fmt.Fprintf(outTmpFile, "%v %v\n", k, output)
 	}
 
 	// rename the file
 	outfilename := "mr-out-" + strconv.Itoa(reduceTask.Identifier)
 	os.Rename(filepath.Join(outTmpFile.Name()), outfilename)
 	outTmpFile.Close()
-	CallAckTask(reduceTask.TaskType)
+	CallAckTask(reduceTask)
 }
 
 //
@@ -195,7 +192,7 @@ func CallExample() {
 	call("Coordinator.Example", &args, &reply)
 
 	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	// fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
 func CallAskTask() *TaskInfo {
@@ -203,16 +200,16 @@ func CallAskTask() *TaskInfo {
 	args := TaskInfo{}
 	// declare a reply structure.
 	reply := TaskInfo{}
-	fmt.Println("Label")
 	// send the RPC request, wait for the reply.
 	call("Coordinator.AskTask", &args, &reply)
-	fmt.Printf("Type %v\n", reply.TaskType)
+	// fmt.Printf("Type %v\n", reply.TaskType)
 	return &reply
 }
 
-func CallAckTask(task_type int) *TaskInfo {
+func CallAckTask(task *TaskInfo) *TaskInfo {
 	args := TaskInfo{
-		TaskType: task_type,
+		TaskType:   task.TaskType,
+		Identifier: task.Identifier,
 	}
 
 	reply := TaskInfo{}
@@ -233,7 +230,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		log.Fatal("dialing:", err)
 	}
 	defer c.Close()
-	fmt.Println("1")
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
