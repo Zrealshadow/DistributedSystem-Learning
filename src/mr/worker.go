@@ -55,7 +55,8 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 
 		default:
-			panic("Invalid task Type")
+			fmt.Printf("Coordinator is close or Invalid TaskType")
+			// panic("Invalid task Type")
 		}
 
 	}

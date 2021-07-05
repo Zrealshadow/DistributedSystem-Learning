@@ -33,7 +33,7 @@ type TaskInfo struct {
 
 func (task *TaskInfo) isOutOfTime() bool {
 	// larger than 60 s  We consider it is out of time
-	return time.Now().Sub(task.BeginTime) > time.Duration(time.Second*60)
+	return time.Now().Sub(task.BeginTime) > time.Duration(time.Second*20)
 }
 
 func (task *TaskInfo) setNow() {
@@ -312,7 +312,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	if err != nil {
 		panic("failed to create tmp directory")
 	}
-	// go c.MoveOutOtTimeTask()
+	go c.MoveOutOtTimeTask()
 	c.server()
 	return &c
 }
