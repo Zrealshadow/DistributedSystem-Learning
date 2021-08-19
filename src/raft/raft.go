@@ -96,7 +96,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	isleader = rf.state == Leader
 	term = rf.currentTerm
 
@@ -167,10 +168,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	term         int
-	candidateId  int
-	lastLogIndex int
-	lastLogTerm  int
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -179,21 +180,21 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	term        int
-	voteGranted bool
+	Term        int
+	VoteGranted bool
 }
 
 type AppendEntriesArgs struct {
-	term         int
-	leaderId     int
-	prevLogIndex int
-	prevLogTerm  int
-	entries      interface{}
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      interface{}
 }
 
 type AppendEntriesReply struct {
-	term    int
-	success bool
+	Term    int
+	Success bool
 }
 
 //
@@ -206,22 +207,22 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	DPrintf("RequestVote: %+v [currentTerm=%d, voteFor=%d]", args, rf.currentTerm, rf.voteFor)
 
-	if args.term > rf.currentTerm {
+	if args.Term > rf.currentTerm {
 		DPrintf("... term out of date in RequestVote")
-		rf.becomeFollower(args.term)
+		rf.becomeFollower(args.Term)
 	}
 
 	// vote
 
-	if rf.currentTerm == args.term && (rf.voteFor == -1 || rf.voteFor == args.candidateId) {
-		reply.voteGranted = true
-		rf.voteFor = args.candidateId
+	if rf.currentTerm == args.Term && (rf.voteFor == -1 || rf.voteFor == args.CandidateId) {
+		reply.VoteGranted = true
+		rf.voteFor = args.CandidateId
 		rf.electionResetEvent = time.Now()
 	} else {
-		reply.voteGranted = false
+		reply.VoteGranted = false
 	}
 
-	reply.term = rf.currentTerm
+	reply.Term = rf.currentTerm
 	DPrintf("... Request reply: %+v", reply)
 
 }
@@ -232,21 +233,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	DPrintf("AppendEntries: %+v", args)
 
-	if args.term > rf.currentTerm {
+	if args.Term > rf.currentTerm {
 		DPrintf("... term out of date in AppendEntries")
-		rf.becomeFollower(args.term)
+		rf.becomeFollower(args.Term)
 	}
 
-	reply.success = false
-	if args.term == rf.currentTerm {
+	reply.Success = false
+	if args.Term == rf.currentTerm {
 		if rf.state != Follower {
-			rf.becomeFollower(args.term)
+			rf.becomeFollower(args.Term)
 		}
 		rf.electionResetEvent = time.Now()
-		reply.success = true
+		reply.Success = true
 	}
 
-	reply.term = rf.currentTerm
+	reply.Term = rf.currentTerm
 	DPrintf("AppendEntries reply : %+v", *reply)
 }
 
@@ -351,7 +352,7 @@ func (rf *Raft) ticker() {
 	startTerm := rf.currentTerm
 	rf.mu.Unlock()
 
-	DPrintf("start an election Ticker  at term = %d", startTerm)
+	DPrintf("%d Server start an election Ticker  at term = %d", rf.me, startTerm)
 
 	t := time.NewTicker(10 * time.Millisecond)
 	// equal to sleep()
@@ -410,8 +411,8 @@ func (rf *Raft) startElection() {
 
 		go func(peerId int) {
 			args := RequestVoteArgs{
-				term:        savedCurrentTerm,
-				candidateId: rf.me,
+				Term:        savedCurrentTerm,
+				CandidateId: rf.me,
 			}
 			var reply RequestVoteReply
 
@@ -419,7 +420,7 @@ func (rf *Raft) startElection() {
 			if ok := rf.sendRequestVote(peerId, &args, &reply); ok {
 				rf.mu.Lock() // use state and term
 				defer rf.mu.Unlock()
-				DPrintf("received RequestVoteReply %+v", reply)
+				DPrintf("%d server received RequestVoteReply %+v", rf.me, reply)
 
 				if rf.state != Candidate {
 					// win n + 1 vote (all vote is 2n + 1) become a Leader
@@ -428,13 +429,13 @@ func (rf *Raft) startElection() {
 					return
 				}
 
-				if reply.term > savedCurrentTerm {
+				if reply.Term > savedCurrentTerm {
 					DPrintf("term out of date in RequestVoteReply")
-					rf.becomeFollower(reply.term)
+					rf.becomeFollower(reply.Term)
 					return
 
-				} else if reply.term == savedCurrentTerm { //
-					if reply.voteGranted {
+				} else if reply.Term == savedCurrentTerm { //
+					if reply.VoteGranted {
 						//true
 						votesReceived += 1
 						// 这里使用了一个函数闭包的性质
@@ -495,21 +496,23 @@ func (rf *Raft) sendHeartbeats() {
 
 	for idx, _ := range rf.peers {
 		args := AppendEntriesArgs{
-			term:     savedCurrentTerm,
-			leaderId: rf.me,
+			Term:     savedCurrentTerm,
+			LeaderId: rf.me,
 		}
-
+		if idx == rf.me {
+			continue
+		}
 		go func(peerId int) {
-			DPrintf("sending AppendEntries to %v: ni=%d, args=%+v", peerId, 0, args)
+			DPrintf("%d sending AppendEntries to %v: ni=%d, args=%+v", rf.me, peerId, 0, args)
 			var reply AppendEntriesReply
 			if ok := rf.sendAppendEntries(peerId, &args, &reply); ok {
-				if reply.term > savedCurrentTerm {
+				if reply.Term > savedCurrentTerm {
 					// discovers server with higher term
 					// become a follower
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
 					DPrintf("term ojut of date in heartbeat reply, server %d become follower", rf.me)
-					rf.becomeFollower(reply.term)
+					rf.becomeFollower(reply.Term)
 					return
 				}
 			}
