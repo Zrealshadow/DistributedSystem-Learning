@@ -47,7 +47,6 @@ func TestInitialElection2A(t *testing.T) {
 
 	// there should still be a leader.
 	cfg.checkOneLeader()
-	println("ssss")
 	cfg.end()
 }
 
@@ -59,16 +58,14 @@ func TestReElection2A(t *testing.T) {
 	cfg.begin("Test (2A): election after network failure")
 
 	leader1 := cfg.checkOneLeader()
-
+	println("1")
 	// if the leader disconnects, a new one should be elected.
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
-
 	// if the old leader rejoins, that shouldn't
 	// disturb the new leader.
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
-
 	// if there's no quorum, no leader should
 	// be elected.
 	cfg.disconnect(leader2)
