@@ -287,7 +287,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			if newEntriesIndex < len(args.Entries) {
 				// append these Entries into local Log
 				DPrintf("... inserting Entries from index %d in Follower %d", logInsertIndex, rf.me)
-				rf.log = append(rf.log, args.Entries[newEntriesIndex:]...)
+				rf.log = append(rf.log[:logInsertIndex], args.Entries[newEntriesIndex:]...)
 			}
 
 			// update CommitIndex in Follower

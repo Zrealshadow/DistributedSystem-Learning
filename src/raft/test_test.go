@@ -217,7 +217,6 @@ func TestFailNoAgree2B(t *testing.T) {
 	cfg.begin("Test (2B): no agreement if too many followers disconnect")
 
 	cfg.one(10, servers, false)
-
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
@@ -233,7 +232,6 @@ func TestFailNoAgree2B(t *testing.T) {
 	}
 
 	time.Sleep(2 * RaftElectionTimeout)
-
 	n, _ := cfg.nCommitted(index)
 	if n > 0 {
 		t.Fatalf("%v committed but no majority", n)
@@ -243,7 +241,6 @@ func TestFailNoAgree2B(t *testing.T) {
 	cfg.connect((leader + 1) % servers)
 	cfg.connect((leader + 2) % servers)
 	cfg.connect((leader + 3) % servers)
-
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
 	leader2 := cfg.checkOneLeader()
@@ -256,7 +253,6 @@ func TestFailNoAgree2B(t *testing.T) {
 	}
 
 	cfg.one(1000, servers, true)
-
 	cfg.end()
 }
 
