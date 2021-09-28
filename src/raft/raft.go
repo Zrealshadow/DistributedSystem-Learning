@@ -380,8 +380,9 @@ type AppendEntriesArgs struct {
 
 type AppendEntriesReply struct {
 	// Your data here (2A).
-	Term    int
-	Success bool
+	Term         int
+	Success      bool
+	NextTryIndex int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -392,6 +393,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = false
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
+		reply.NextTryIndex = rf.log.getLastIndex() + 1
 		DebugPf(dCommit, "%d Server's Term is higher than %d Leader in AppendEntries", rf.me, args.LeaderId)
 		return
 	}
@@ -453,7 +455,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 
 		}
-
 		// update commitIndex
 		if args.LeaderCommit > rf.commitIndex {
 			rf.commitIndex = func(x int, y int) int {
@@ -470,6 +471,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
+	// Optimization : if the AppendEntry failed and Term is same , we should find the conflict Index instead of -1
+	if args.PrevLogIndex >= baseIndex_ && args.PrevLogTerm != rf.log.getEntry(args.PrevLogIndex).Term {
+		term := rf.log.getEntry(args.PrevLogIndex).Term
+		// this term is mistake , find another term log
+		for i := args.PrevLogIndex - 1; i >= baseIndex_; i-- {
+
+			if rf.log.getEntry(i).Term != term {
+				// PrevLogTerm != term
+				reply.NextTryIndex = i + 1
+				break
+			}
+		}
+	}
 	reply.Term = rf.currentTerm
 	DebugPf(dCommit, "%d Server return to %d Server AppendEntries %+v", rf.me, args.LeaderId, reply)
 
@@ -857,7 +871,13 @@ func (rf *Raft) sendAndProcessAppendEntries(peerId int, args AppendEntriesArgs) 
 			rf.advanceCommitIndexL() // 5.4 update commitIndex
 		} else {
 			// conflict
-			rf.nextIndex[peerId] -= 1
+			rf.nextIndex[peerId] = func(x int, y int) int {
+				if x > y {
+					return y
+				} else {
+					return x
+				}
+			}(reply.NextTryIndex, rf.log.getLastIndex())
 		}
 
 	}
