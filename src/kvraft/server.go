@@ -1,12 +1,14 @@
 package kvraft
 
 import (
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
 )
 
 const Debug = false
@@ -18,11 +20,30 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+const (
+	PUT    = "PUT"
+	APPEND = "APPEND"
+	GET    = "GET"
+)
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	OpType    string
+	ClientId  int64
+	RequestId int64
+	Key       string
+	Value     string
+}
+
+type Ans struct {
+	OK        bool
+	Err       Err
+	ClientId  int64
+	RequestId int64
+	Key       string
+	Value     string
 }
 
 type KVServer struct {
@@ -34,16 +55,178 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	// Your definitions here.
-}
+	ack map[int64]int64 // clientIndex to latest requestIndex  for duplication
 
+	data map[string]string // k-v store
+	// Your definitions here.
+
+	finishCh map[int]chan Ans // Log index To wheather it finished
+
+	timeOutDuration time.Duration
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	op := Op{
+		OpType:    GET,
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
+		Key:       args.Key,
+	}
+
+	ans := kv.SubmitToRaft(op)
+
+	if ans.OK {
+		reply.LeaderId = kv.me
+		reply.Value = ans.Value
+		reply.Err = OK
+		return
+	}
+
+	reply.Err = ans.Err
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	// kv.mu.Lock()
+	// defer kv.mu.Unlock()
+	op := Op{
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
+		Key:       args.Key,
+		Value:     args.Value,
+	}
+
+	if args.Op == "Put" {
+		op.OpType = PUT
+	} else {
+		op.OpType = APPEND
+	}
+
+	ans := kv.SubmitToRaft(op)
+
+	if ans.OK {
+		reply.LeaderId = kv.me
+		reply.Err = OK
+		DebugPf(dLog2, "Retuen OK %+v", reply)
+		return
+	}
+	reply.Err = ans.Err
+}
+
+func (kv *KVServer) isRequestDuplicated(clientId int64, requestId int64) bool {
+	if requestId_, ok := kv.ack[clientId]; ok {
+		return requestId_ >= requestId
+	}
+	return false
+}
+
+func (kv *KVServer) isMatch(ans *Ans, op *Op) bool {
+	return ans.ClientId == op.ClientId && ans.RequestId == op.RequestId
+}
+
+func (kv *KVServer) SubmitToRaft(op Op) Ans {
+	// Weather it is leader
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		DebugPf(dServer, "Server %d is not Leader", kv.me)
+		return Ans{OK: false, Err: ErrWrongLeader}
+	}
+
+	DebugPf(dServer, "Server %d Submit Operation %+v", kv.me, op)
+
+	kv.mu.Lock()
+	if _, ok := kv.finishCh[index]; !ok {
+		kv.finishCh[index] = make(chan Ans, 1)
+	}
+	kv.mu.Unlock()
+
+	ch := kv.finishCh[index]
+	select {
+	// wait until raft reach agreement
+	case ans := <-ch:
+		{
+			DebugPf(dLog, "Get Ans %+v in Submit Channel for op %+v", ans, op)
+			if kv.isMatch(&ans, &op) {
+				return ans
+			}
+			return Ans{OK: false, Err: ErrCommon}
+		}
+		// or timeout return false
+	case <-time.After(kv.timeOutDuration):
+		{
+			return Ans{OK: false, Err: ErrTimeOut}
+		}
+	}
+}
+
+func (kv *KVServer) ExecuteLog() {
+	for kv.dead == 0 {
+		msg := <-kv.applyCh
+		if msg.CommandValid {
+			// execute CommanValid
+			op := msg.Command.(Op)
+			ans := kv.applyOp(&op)
+			DebugPf(dServer, "Server %d Execute log %+v and Get ans %+v", kv.me, op, ans)
+
+			kv.mu.Lock()
+			if _, ok := kv.finishCh[msg.CommandIndex]; !ok {
+				// no way
+				kv.finishCh[msg.CommandIndex] = make(chan Ans, 1)
+			}
+
+			ch := kv.finishCh[msg.CommandIndex]
+			kv.mu.Unlock()
+
+			select {
+			case <-ch: // clean stale data , it won't be invoked
+			default:
+			}
+			ch <- ans
+			DebugPf(dInfo, "Insert Ans %+v to Index Channel", ans)
+		}
+	}
+}
+
+func (kv *KVServer) applyOp(op *Op) Ans {
+	var ans Ans
+	ans.ClientId = op.ClientId
+	ans.RequestId = op.RequestId
+	switch op.OpType {
+	case GET:
+		{
+			if _, ok := kv.data[op.Key]; ok {
+				ans.OK = true
+				ans.Err = OK
+				ans.Value = kv.data[op.Key]
+			} else {
+				ans.OK = false
+				ans.Err = ErrNoKey
+			}
+		}
+	case PUT:
+		{
+			if !kv.isRequestDuplicated(op.ClientId, op.RequestId) {
+				kv.data[op.Key] = op.Value
+			}
+			ans.OK = true
+			ans.Err = OK
+			// update ack
+			kv.ack[op.ClientId] = op.RequestId
+
+		}
+	case APPEND:
+		{
+			if !kv.isRequestDuplicated(op.ClientId, op.RequestId) {
+				kv.data[op.Key] += op.Value
+			}
+			ans.OK = true
+			ans.Err = OK
+			kv.ack[op.ClientId] = op.RequestId // update Ack
+			// DebugPf(dAPPEND, "After Append Op %+v check Data %+v", op, kv.data)
+		}
+	}
+	return ans
 }
 
 //
@@ -60,6 +243,7 @@ func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
+	kv.dead = 1
 }
 
 func (kv *KVServer) killed() bool {
@@ -94,8 +278,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
 	// You may need initialization code here.
-
+	kv.ack = make(map[int64]int64)
+	kv.data = make(map[string]string)
+	kv.finishCh = make(map[int]chan Ans)
+	kv.timeOutDuration = 240 * time.Millisecond
+	go kv.ExecuteLog()
 	return kv
 }
