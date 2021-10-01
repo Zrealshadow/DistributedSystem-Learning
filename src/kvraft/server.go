@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -47,11 +48,12 @@ type Ans struct {
 }
 
 type KVServer struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+	mu        sync.Mutex
+	me        int
+	rf        *raft.Raft
+	applyCh   chan raft.ApplyMsg
+	dead      int32 // set by Kill()
+	persister *raft.Persister
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -139,9 +141,8 @@ func (kv *KVServer) SubmitToRaft(op Op) Ans {
 	if _, ok := kv.finishCh[index]; !ok {
 		kv.finishCh[index] = make(chan Ans, 1)
 	}
-	kv.mu.Unlock()
-
 	ch := kv.finishCh[index]
+	kv.mu.Unlock()
 	select {
 	// wait until raft reach agreement
 	case ans := <-ch:
@@ -161,14 +162,14 @@ func (kv *KVServer) SubmitToRaft(op Op) Ans {
 }
 
 func (kv *KVServer) ExecuteLog() {
-	for kv.dead == 0 {
+	for !kv.killed() {
 		msg := <-kv.applyCh
+		// DebugPf(dLog, "Add MSG %+v", msg)
 		if msg.CommandValid {
 			// execute CommanValid
 			op := msg.Command.(Op)
 			ans := kv.applyOp(&op)
 			DebugPf(dServer, "Server %d Execute log %+v and Get ans %+v", kv.me, op, ans)
-
 			kv.mu.Lock()
 			if _, ok := kv.finishCh[msg.CommandIndex]; !ok {
 				// no way
@@ -182,8 +183,34 @@ func (kv *KVServer) ExecuteLog() {
 			case <-ch: // clean stale data , it won't be invoked
 			default:
 			}
+
 			ch <- ans
+			// check the raft size and create snapshot
+			if kv.persister.RaftStateSize() > kv.maxraftstate && kv.maxraftstate != -1 {
+				// create snapshot
+				DebugPf(dSnap, "[%d S] : Create Snapshot in Comman Indes %d, Command %+v", kv.me, msg.CommandIndex, msg, msg.Command)
+				w := new(bytes.Buffer)
+				e := labgob.NewEncoder(w)
+				e.Encode(kv.ack)
+				e.Encode(kv.data)
+				go kv.rf.Snapshot(msg.CommandIndex, w.Bytes())
+			}
+
 			DebugPf(dInfo, "Insert Ans %+v to Index Channel", ans)
+		} else {
+			// create Snapshot
+			DebugPf(dSnap, "[%d S] Recover from Snapshot ", kv.me)
+			r := bytes.NewBuffer(msg.Snapshot)
+			d := labgob.NewDecoder(r)
+			var lastIncludedIndex, lastIncludedTerm int
+			var lastCommand Op
+			d.Decode(&lastCommand)
+			d.Decode(&lastIncludedIndex)
+			d.Decode(&lastIncludedTerm)
+
+			d.Decode(&kv.ack)
+			d.Decode(&kv.data)
+
 		}
 	}
 }
@@ -229,6 +256,22 @@ func (kv *KVServer) applyOp(op *Op) Ans {
 	return ans
 }
 
+func (kv *KVServer) readPersist() {
+	if kv.persister.SnapshotSize() == 0 {
+		return
+	}
+	var lastIncludedIndex, lastIncludedTerm int
+	var lastCommand Op
+	snapshot := kv.persister.ReadSnapshot()
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	d.Decode(&lastCommand)
+	d.Decode(&lastIncludedIndex)
+	d.Decode(&lastIncludedTerm)
+	d.Decode(&kv.ack)
+	d.Decode(&kv.data)
+}
+
 //
 // the tester calls Kill() when a KVServer instance won't
 // be needed again. for your convenience, we supply
@@ -243,7 +286,6 @@ func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
-	kv.dead = 1
 }
 
 func (kv *KVServer) killed() bool {
@@ -268,21 +310,24 @@ func (kv *KVServer) killed() bool {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
+
 	labgob.Register(Op{})
 
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
-
+	kv.persister = persister
 	// You may need initialization code here.
 
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.applyCh = make(chan raft.ApplyMsg, 100)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	// You may need initialization code here.
 	kv.ack = make(map[int64]int64)
 	kv.data = make(map[string]string)
 	kv.finishCh = make(map[int]chan Ans)
 	kv.timeOutDuration = 240 * time.Millisecond
+	// DebugPf(dServer, "%d Server Start", kv.me)
+	kv.readPersist()
 	go kv.ExecuteLog()
 	return kv
 }
