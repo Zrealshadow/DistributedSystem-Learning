@@ -92,7 +92,7 @@ func (l *Log) getEntry(index int) Entry {
 	idx := index - l.Logentries[0].Index
 
 	if idx >= len(l.Logentries) || idx < 0 {
-		return Entry{}
+		panic("Log Index is outof range ")
 	}
 
 	return l.Logentries[idx]
@@ -405,21 +405,41 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.setElectionTime()
 
 	baseIndex_, _ := rf.log.getBaseIndexAndTerm()
-	lastIndex_, _ := rf.log.getLastIndexAndTerm()
+
+	// if args.PrevLogIndex > lastIndex reset NextIndex
+	if args.PrevLogIndex > rf.log.getLastIndex() || args.PrevLogIndex < rf.log.getBaseIndex() {
+		reply.NextTryIndex = rf.log.getLastIndex() + 1
+		reply.Term = rf.currentTerm
+		return
+	}
+
+	// Optimization : if the AppendEntry failed and Term is same , we should find the conflict Index instead of minus 1
+	if args.PrevLogTerm != rf.log.getEntry(args.PrevLogIndex).Term {
+		term := rf.log.getEntry(args.PrevLogIndex).Term
+		// this term is mistake , find another term log
+		for i := args.PrevLogIndex - 1; i >= baseIndex_; i-- {
+
+			if rf.log.getEntry(i).Term != term {
+				// PrevLogTerm != term
+				reply.NextTryIndex = i + 1
+				break
+			}
+		}
+	}
 
 	// prev log is same
 	// default that prevLogIndex > baseIndex
-	if args.PrevLogIndex <= lastIndex_ && args.PrevLogTerm == rf.log.getEntry(args.PrevLogIndex).Term {
+	if args.PrevLogTerm == rf.log.getEntry(args.PrevLogIndex).Term {
 		reply.Success = true
 		// we need to check the final match on
 		logInsertIndex := args.PrevLogIndex + 1
 		newEntriesIndex := logInsertIndex
 		// Initialize
-		if args.PrevLogIndex <= baseIndex_ {
-			// DPrintf("prevLogIndex:%d baseIndex %d", args.PrevLogIndex, baseIndex_)
-			logInsertIndex = baseIndex_ + 1
-			newEntriesIndex = logInsertIndex
-		}
+		// if args.PrevLogIndex <= baseIndex_ {
+		// 	// DPrintf("prevLogIndex:%d baseIndex %d", args.PrevLogIndex, baseIndex_)
+		// 	logInsertIndex = baseIndex_ + 1
+		// 	newEntriesIndex = logInsertIndex
+		// }
 		// DebugPf(dWarn,"logInsertIndex:%d, ")
 
 		// find the mismatch
@@ -471,19 +491,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
-	// Optimization : if the AppendEntry failed and Term is same , we should find the conflict Index instead of -1
-	if args.PrevLogIndex >= baseIndex_ && args.PrevLogTerm != rf.log.getEntry(args.PrevLogIndex).Term {
-		term := rf.log.getEntry(args.PrevLogIndex).Term
-		// this term is mistake , find another term log
-		for i := args.PrevLogIndex - 1; i >= baseIndex_; i-- {
-
-			if rf.log.getEntry(i).Term != term {
-				// PrevLogTerm != term
-				reply.NextTryIndex = i + 1
-				break
-			}
-		}
-	}
 	reply.Term = rf.currentTerm
 	DebugPf(dCommit, "%d Server return to %d Server AppendEntries %+v", rf.me, args.LeaderId, reply)
 
@@ -651,7 +658,7 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		rf.tickL()
-		ms := 50
+		ms := 30
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -709,6 +716,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make(map[int]int)
 	rf.matchIndex = make(map[int]int)
 	rf.applyCh = applyCh
+
 	rf.lastApplied = 0
 	rf.commitIndex = 0
 
@@ -877,7 +885,7 @@ func (rf *Raft) sendAndProcessAppendEntries(peerId int, args AppendEntriesArgs) 
 				} else {
 					return x
 				}
-			}(reply.NextTryIndex, rf.log.getLastIndex())
+			}(reply.NextTryIndex, rf.log.getLastIndex()+1)
 		}
 
 	}
