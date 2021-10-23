@@ -44,10 +44,9 @@ type Clerk struct {
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
 
-	mu          sync.Mutex
-	requestId   int64
-	clientId    int64
-	groupPrefer map[int]int // gid-> leader idx
+	mu        sync.Mutex
+	requestId int64
+	clientId  int64
 	// You will have to modify this struct.
 }
 
@@ -79,31 +78,26 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
 	args.Key = key
+
 	ck.mu.Lock()
 	args.RequestId = ck.requestId
 	ck.requestId += 1
 	ck.mu.Unlock()
+
 	args.ClientId = ck.clientId
 
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 
-		ck.mu.Lock()
-		leaderOffset := ck.groupPrefer[gid]
-		ck.mu.Unlock()
-
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
-			for si := 0; si < len(servers); si++ {
-				idx := (si + leaderOffset) % len(servers)
-				srv := ck.make_end(servers[idx])
+			for si := 0; si < len(servers); {
+				srv := ck.make_end(servers[si])
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
-					ck.mu.Lock()
-					ck.groupPrefer[gid] = idx
-					ck.mu.Unlock()
+					logDebug(dClient, "Success Send Request %d To [GID %d Leader %d] Get Key %s Value %s", args.RequestId, gid, si, args.Key, reply.Value)
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
@@ -123,7 +117,6 @@ func (ck *Clerk) Get(key string) string {
 		ck.config = ck.sm.Query(-1)
 	}
 
-	return ""
 }
 
 //
@@ -146,20 +139,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 
-		ck.mu.Lock()
-		leaderOffset := ck.groupPrefer[gid]
-		ck.mu.Unlock()
-
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); {
-				idx := (si + leaderOffset) % len(servers)
-				srv := ck.make_end(servers[idx])
+				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
-					ck.mu.Lock()
-					ck.groupPrefer[gid] = idx
-					ck.mu.Unlock()
+					logDebug(dClient, "Success Send Request %d To [GID %d Leader %d] %s Key %s Value %s", args.RequestId, gid, si, args.Op, args.Key, args.Value)
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {

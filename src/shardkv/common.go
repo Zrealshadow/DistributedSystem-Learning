@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"6.824/shardctrler"
 )
 
 //
@@ -23,6 +25,7 @@ const (
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrTimeout     = "ErrTimeout"
+	ErrNoReady     = "ErrNoReady"
 )
 
 type Err string
@@ -61,6 +64,10 @@ const (
 	GET    = "GET"
 	PUT    = "PUT"
 	APPEND = "APPEND"
+	UPDATE = "UPDATE"
+	FINISH = "FINISH"
+	ADD    = "ADD"
+	DELETE = "DELETE"
 )
 
 func deepCopyShard(m map[string]string) map[string]string {
@@ -71,8 +78,16 @@ func deepCopyShard(m map[string]string) map[string]string {
 	return m_
 }
 
+func deepCopyConfig(c *shardctrler.Config) shardctrler.Config {
+	config := shardctrler.Config{Num: c.Num, Shards: c.Shards, Groups: make(map[int][]string)}
+	for k, v := range c.Groups {
+		config.Groups[k] = v
+	}
+	return config
+}
+
 // ------------------------- * Debug Log Part *----------------------
-const Debug bool = true
+const Debug bool = false
 
 type logTopic string
 
@@ -91,6 +106,9 @@ const (
 	dAPPEND  logTopic = "APPEND"
 	dPUT     logTopic = "PUT"
 	dGET     logTopic = "GET"
+	dDELETE  logTopic = "DELETE"
+	dADD     logTopic = "ADD"
+	dConfig  logTopic = "CONFIG"
 )
 
 func getVerbosity() int {
@@ -116,7 +134,7 @@ func init() {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 }
 
-func DebugPf(topic logTopic, format string, a ...interface{}) {
+func logDebug(topic logTopic, format string, a ...interface{}) {
 	if Debug {
 		time := time.Since(debugStart).Microseconds()
 		time /= 100
