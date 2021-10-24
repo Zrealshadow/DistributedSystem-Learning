@@ -2,37 +2,39 @@
 
 
 
-### Outline
+## Outline
 
-- [x] #### Lab 1 Mapreduce
+##### Lab 1 Mapreduce
 
-- [x] #### Lab 2 Raft Protocal
+##### Lab 2 Raft Protocal
 
-  - [x]  2A Leader Election
+- [x]  2A Leader Election
 
-  - [x]  2B Log Completion
+- [x]  2B Log Completion
 
-  - [x]  2C Persistence
+- [x]  2C Persistence
 
-  - [x]  2D Log Compaction
+- [x]  2D Log Compaction
 
-- [x] #### Lab 3 Key-Value Service
+##### Lab 3 Key-Value Service
 
-  - [x] Part A : Key/Value service without snapshots
+- [x] Part A : Key/Value service without snapshots
 
-  - [x] Part B : Key/Value service with snapshots
+- [x] Part B : Key/Value service with snapshots
 
-- [x] #### Lab 4 Sharded Key-Value Service
+##### Lab 4 Sharded Key-Value Service
 
-  - [x] Part A : The Shard controller
+- [x] Part A : The Shard controller
 
-  - [x] Part B : Sharded Key/Value Server
-    - Challenge 1 : Garbage collection of state
-    - Challenge 2 : Client requests during configuration changes
+- [x] Part B : Sharded Key/Value Server
+  - Challenge 1 : Garbage collection of state
+  - Challenge 2 : Client requests during configuration changes
 
 
 
-### Notes and Reference About Lab
+
+
+## Notes and Reference About Lab
 
 - [Lab2 Keynotes Gist](https://gist.github.com/Zrealshadow/9e4a8e213bb9eca5b5ce2e985b396f7c)
 - [Lab2 Unreliable Unit test Pass solution](https://gist.github.com/Zrealshadow/5ae7da85d00194cc331a0b996b57b90e)
@@ -42,7 +44,9 @@
 
 
 
-### Solution for challenges in Lab4
+
+
+## Solution for challenges in Lab4
 
 **Challenge 1**
 
@@ -56,7 +60,7 @@ I do not arrange an extra goroutine for Garbage Collection. And it turns out thi
 
 
 
-### Run 
+## Run 
 
 The solution can pass all unit tests reliably in Lab1- Lab3. Just go into the workspace and run `go test -race`
 
