@@ -1,5 +1,7 @@
 # Distributed System 6.824 Spring 2021
 
+Personal solutions to labs of MIT 6.824 Spring 2021
+
 
 
 ## Outline
